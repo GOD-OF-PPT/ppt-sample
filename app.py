@@ -121,20 +121,24 @@ def detect_questions_ocr(doc):
 # RENDERING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def crop_lr_whitespace(img, padding=20, threshold=245):
+def crop_whitespace(img, padding=20, threshold=245):
     """
-    Crop left/right whitespace from a PIL Image independently.
-    Scans each column; columns where all pixels are >= threshold are white.
-    Keeps `padding` pixels of margin on each side of the detected content.
+    Crop whitespace on all 4 sides of a PIL Image independently.
+    A row/column is considered white when every pixel >= threshold.
+    Keeps `padding` pixels of margin around the detected content area.
     """
-    arr = np.array(img.convert("L"))   # grayscale → 2-D array (rows × cols)
-    col_min = arr.min(axis=0)          # darkest pixel in each column
+    arr = np.array(img.convert("L"))          # grayscale 2-D array (rows × cols)
+    col_min = arr.min(axis=0)                 # darkest pixel per column
+    row_min = arr.min(axis=1)                 # darkest pixel per row
     content_cols = np.where(col_min < threshold)[0]
-    if content_cols.size == 0:
+    content_rows = np.where(row_min < threshold)[0]
+    if content_cols.size == 0 or content_rows.size == 0:
         return img
-    left  = max(0,          int(content_cols[0])  - padding)
-    right = min(img.width,  int(content_cols[-1]) + padding + 1)
-    return img.crop((left, 0, right, img.height))
+    left   = max(0,           int(content_cols[0])  - padding)
+    right  = min(img.width,   int(content_cols[-1]) + padding + 1)
+    top    = max(0,           int(content_rows[0])  - padding)
+    bottom = min(img.height,  int(content_rows[-1]) + padding + 1)
+    return img.crop((left, top, right, bottom))
 
 
 def render_question_pages(doc, q_start, q_end):
@@ -163,7 +167,7 @@ def render_question_pages(doc, q_start, q_end):
             continue
         pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        pages.append(crop_lr_whitespace(img))
+        pages.append(crop_whitespace(img))
     return pages or [Image.new("RGB", (100, 100), "white")]
 
 
@@ -214,14 +218,15 @@ def build_pptx(questions):
             img_w, img_h = img.size
             aspect = img_w / img_h
 
-            # Scale image to fill column width; cap at content height
-            disp_w = Emu(col_w)
-            disp_h = Emu(int(col_w / aspect))
-            if disp_h > content_h:
-                disp_h = content_h
-                disp_w = Emu(int(content_h * aspect))
+            # Fill content height; scale down if wider than column
+            disp_h = content_h
+            disp_w = Emu(int(content_h * aspect))
+            if disp_w > Emu(col_w):
+                disp_w = Emu(col_w)
+                disp_h = Emu(int(col_w / aspect))
 
-            left = Emu(i * col_w)
+            # Centre horizontally within column
+            left = Emu(i * col_w + (col_w - int(disp_w)) // 2)
             buf  = io.BytesIO()
             img.save(buf, format="PNG")
             buf.seek(0)
