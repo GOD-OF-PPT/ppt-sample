@@ -19,6 +19,7 @@ RENDER_SCALE        = 2.0   # hi-res output (144 dpi)
 OCR_SCALE           = 1.5   # lower scale for OCR question-detection pass
 TOP_MARGIN_PTS      = 6     # pts above detected question start to include
 OCR_Y_THRESHOLD_PTS = 200   # max PDF pts from page-top for question-num search
+MIN_SEGMENT_H_PTS   = 150   # skip page segments shorter than this (whitespace strips)
 
 # ── Slide layout ─────────────────────────────────────────────────────────────
 SLIDE_W_IN  = 13.33   # widescreen landscape
@@ -119,13 +120,17 @@ def detect_questions_ocr(doc):
 # RENDERING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_question_image(doc, q_start, q_end):
-    """Render the question region as a single stitched hi-res PIL Image."""
-    mat  = fitz.Matrix(RENDER_SCALE, RENDER_SCALE)
+def render_question_pages(doc, q_start, q_end):
+    """
+    Render each PDF page segment of a question as a separate hi-res PIL Image.
+    Segments shorter than MIN_SEGMENT_H_PTS (whitespace margins) are skipped.
+    Returns a non-empty list of images.
+    """
+    mat = fitz.Matrix(RENDER_SCALE, RENDER_SCALE)
     sp, sy = q_start["page_idx"], q_start["y_start"]
     ep = q_end["page_idx"] if q_end else len(doc) - 1
     ey = q_end["y_start"] if q_end else None
-    parts = []
+    pages = []
     for pi in range(sp, ep + 1):
         page = doc[pi]
         pw, ph = page.rect.width, page.rect.height
@@ -137,24 +142,11 @@ def render_question_image(doc, q_start, q_end):
             clip = fitz.Rect(0, 0, pw, ey if ey is not None else ph)
         else:
             clip = fitz.Rect(0, 0, pw, ph)
-        if clip.height < 1:
+        if clip.height < MIN_SEGMENT_H_PTS:
             continue
         pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
-        parts.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
-
-    if not parts:
-        return Image.new("RGB", (100, 100), "white")
-    if len(parts) == 1:
-        return parts[0]
-
-    total_h = sum(p.height for p in parts)
-    max_w   = max(p.width  for p in parts)
-    out = Image.new("RGB", (max_w, total_h), "white")
-    y = 0
-    for p in parts:
-        out.paste(p, (0, y))
-        y += p.height
-    return out
+        pages.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
+    return pages or [Image.new("RGB", (100, 100), "white")]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -178,8 +170,8 @@ def _add_title_bar(slide, slide_w, title_h, label):
 
 def build_pptx(questions):
     """
-    questions: list of {"num": int, "img": PIL.Image}
-    One slide per question, screenshot scaled to fit.
+    questions: list of {"num": int, "pages": [PIL.Image, ...]}
+    One slide per question; page screenshots arranged side-by-side, no gaps.
     Returns BytesIO of the PPTX.
     """
     prs = Presentation()
@@ -196,23 +188,26 @@ def build_pptx(questions):
         slide = prs.slides.add_slide(blank)
         _add_title_bar(slide, slide_w, title_h, f"第 {item['num']} 题")
 
-        img = item["img"]
-        img_w, img_h = img.size
-        aspect = img_w / img_h
+        pages = item["pages"]
+        n     = len(pages)
+        col_w = int(slide_w / n)   # integer EMU, equal column width
 
-        # Fit inside content area preserving aspect ratio
-        if slide_w / aspect <= content_h:
-            disp_w = slide_w
-            disp_h = Emu(int(slide_w / aspect))
-        else:
-            disp_h = content_h
-            disp_w = Emu(int(content_h * aspect))
+        for i, img in enumerate(pages):
+            img_w, img_h = img.size
+            aspect = img_w / img_h
 
-        left = Emu(int((slide_w - disp_w) / 2))
-        buf  = io.BytesIO()
-        img.save(buf, format="PNG")
-        buf.seek(0)
-        slide.shapes.add_picture(buf, left, title_h, disp_w, disp_h)
+            # Scale image to fill column width; cap at content height
+            disp_w = Emu(col_w)
+            disp_h = Emu(int(col_w / aspect))
+            if disp_h > content_h:
+                disp_h = content_h
+                disp_w = Emu(int(content_h * aspect))
+
+            left = Emu(i * col_w)
+            buf  = io.BytesIO()
+            img.save(buf, format="PNG")
+            buf.seek(0)
+            slide.shapes.add_picture(buf, left, title_h, disp_w, disp_h)
 
     out = io.BytesIO()
     prs.save(out)
@@ -248,9 +243,9 @@ def convert():
     if questions:
         items = []
         for i, q in enumerate(questions):
-            q_end = questions[i + 1] if i + 1 < len(questions) else None
-            img   = render_question_image(doc, q, q_end)
-            items.append({"num": q["num"], "img": img})
+            q_end  = questions[i + 1] if i + 1 < len(questions) else None
+            pages  = render_question_pages(doc, q, q_end)
+            items.append({"num": q["num"], "pages": pages})
     else:
         # Fallback: one slide per page
         mat = fitz.Matrix(RENDER_SCALE, RENDER_SCALE)
@@ -259,7 +254,7 @@ def convert():
             page = doc[pi]
             pix  = page.get_pixmap(matrix=mat, alpha=False)
             img  = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            items.append({"num": pi + 1, "img": img})
+            items.append({"num": pi + 1, "pages": [img]})
 
     pptx_buf = build_pptx(items)
     doc.close()
