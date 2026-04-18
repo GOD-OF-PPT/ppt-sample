@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>试卷 PDF → PPTX 转换器</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+                   "Microsoft YaHei", sans-serif;
+      background: #f0f4f8;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.10);
+      padding: 48px 40px 40px;
+      width: 100%;
+      max-width: 560px;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a202c;
+      text-align: center;
+      margin-bottom: 6px;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: #718096;
+      text-align: center;
+      margin-bottom: 36px;
+    }
+
+    /* ── Drop zone ── */
+    .drop-zone {
+      border: 2px dashed #cbd5e0;
+      border-radius: 12px;
+      padding: 40px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      background: #f7fafc;
+      position: relative;
+    }
+    .drop-zone.drag-over {
+      border-color: #265fab;
+      background: #ebf4ff;
+    }
+    .drop-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .drop-icon {
+      font-size: 40px;
+      margin-bottom: 12px;
+    }
+    .drop-label {
+      font-size: 15px;
+      color: #4a5568;
+      font-weight: 500;
+    }
+    .drop-hint {
+      font-size: 12px;
+      color: #a0aec0;
+      margin-top: 6px;
+    }
+    .file-name {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #265fab;
+      font-weight: 600;
+      word-break: break-all;
+    }
+
+    /* ── Button ── */
+    .btn {
+      display: block;
+      width: 100%;
+      margin-top: 24px;
+      padding: 14px;
+      font-size: 16px;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity .2s, transform .1s;
+    }
+    .btn:active { transform: scale(.98); }
+    .btn-primary {
+      background: #265fab;
+      color: #fff;
+    }
+    .btn-primary:disabled {
+      opacity: .45;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .btn-success {
+      background: #38a169;
+      color: #fff;
+    }
+
+    /* ── Progress ── */
+    .progress-wrap {
+      margin-top: 20px;
+      display: none;
+    }
+    .progress-wrap.visible { display: block; }
+    .progress-bar-bg {
+      background: #e2e8f0;
+      border-radius: 999px;
+      height: 8px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: #265fab;
+      border-radius: 999px;
+      width: 0%;
+      transition: width .3s ease;
+    }
+    .progress-bar-fill.indeterminate {
+      width: 60%;
+      animation: slide 1.4s infinite ease-in-out;
+    }
+    @keyframes slide {
+      0%   { transform: translateX(-80%); }
+      100% { transform: translateX(250%); }
+    }
+
+    /* ── Status message ── */
+    .status {
+      margin-top: 14px;
+      font-size: 13px;
+      text-align: center;
+      min-height: 20px;
+      color: #4a5568;
+    }
+    .status.error   { color: #e53e3e; }
+    .status.success { color: #38a169; }
+
+    /* ── Download section ── */
+    .download-wrap {
+      margin-top: 20px;
+      display: none;
+    }
+    .download-wrap.visible { display: block; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #e2e8f0;
+      margin: 28px 0 20px;
+    }
+
+    .tips {
+      font-size: 12px;
+      color: #a0aec0;
+      line-height: 1.7;
+      margin-top: 24px;
+    }
+    .tips li { margin-left: 16px; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>试卷 PDF → PPTX</h1>
+  <p class="subtitle">每道题自动截图，生成独立 Slide</p>
+
+  <!-- Upload -->
+  <div class="drop-zone" id="dropZone">
+    <input type="file" id="fileInput" accept=".pdf" />
+    <div class="drop-icon">📄</div>
+    <div class="drop-label">点击选择或拖拽 PDF 文件</div>
+    <div class="drop-hint">仅支持 .pdf 格式</div>
+    <div class="file-name" id="fileName"></div>
+  </div>
+
+  <!-- Convert button -->
+  <button class="btn btn-primary" id="convertBtn" disabled>开始转换</button>
+
+  <!-- Progress -->
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill indeterminate" id="progressFill"></div>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div class="status" id="status"></div>
+
+  <!-- Download -->
+  <div class="download-wrap" id="downloadWrap">
+    <hr class="divider" />
+    <button class="btn btn-success" id="downloadBtn">⬇ 下载 PPTX 文件</button>
+  </div>
+
+  <ul class="tips">
+    <li>题目编号格式支持：<code>1.</code>、<code>1、</code>、<code>第1题</code></li>
+    <li>支持跨页题目，内容将自动拼合</li>
+    <li>若未识别到题号，自动回退为一页一 Slide</li>
+  </ul>
+</div>
+
+<script>
+  const dropZone    = document.getElementById('dropZone');
+  const fileInput   = document.getElementById('fileInput');
+  const fileNameEl  = document.getElementById('fileName');
+  const convertBtn  = document.getElementById('convertBtn');
+  const progressWrap= document.getElementById('progressWrap');
+  const progressFill= document.getElementById('progressFill');
+  const statusEl    = document.getElementById('status');
+  const downloadWrap= document.getElementById('downloadWrap');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  let selectedFile = null;
+  let pptxBlob = null;
+
+  // ── File selection ──────────────────────────────────────────────
+  fileInput.addEventListener('change', () => {
+    handleFile(fileInput.files[0]);
+  });
+
+  dropZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+  });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if (f && f.name.toLowerCase().endsWith('.pdf')) handleFile(f);
+    else setStatus('请上传 PDF 文件', 'error');
+  });
+
+  function handleFile(file) {
+    if (!file) return;
+    selectedFile = file;
+    fileNameEl.textContent = file.name;
+    convertBtn.disabled = false;
+    resetResult();
+    setStatus('');
+  }
+
+  // ── Convert ─────────────────────────────────────────────────────
+  convertBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    startLoading();
+
+    const form = new FormData();
+    form.append('pdf', selectedFile);
+
+    try {
+      const resp = await fetch('/convert', { method: 'POST', body: form });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+
+      pptxBlob = await resp.blob();
+      stopLoading();
+      setStatus(`转换成功！共生成 PPTX 文件。`, 'success');
+      downloadWrap.classList.add('visible');
+    } catch (e) {
+      stopLoading();
+      setStatus(`转换失败：${e.message}`, 'error');
+    }
+  });
+
+  // ── Download ────────────────────────────────────────────────────
+  downloadBtn.addEventListener('click', () => {
+    if (!pptxBlob) return;
+    const url = URL.createObjectURL(pptxBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = selectedFile
+      ? selectedFile.name.replace(/\.pdf$/i, '.pptx')
+      : 'exam.pptx';
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // ── Helpers ─────────────────────────────────────────────────────
+  function startLoading() {
+    convertBtn.disabled = true;
+    progressWrap.classList.add('visible');
+    progressFill.classList.add('indeterminate');
+    resetResult();
+    setStatus('正在处理，请稍候…');
+  }
+
+  function stopLoading() {
+    progressFill.classList.remove('indeterminate');
+    progressFill.style.width = '100%';
+    setTimeout(() => {
+      progressWrap.classList.remove('visible');
+      progressFill.style.width = '0%';
+    }, 600);
+    convertBtn.disabled = false;
+  }
+
+  function resetResult() {
+    pptxBlob = null;
+    downloadWrap.classList.remove('visible');
+  }
+
+  function setStatus(msg, type = '') {
+    statusEl.textContent = msg;
+    statusEl.className = 'status ' + type;
+  }
+</script>
+</body>
+</html>
