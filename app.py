@@ -20,12 +20,12 @@ OCR_SCALE           = 1.5   # lower scale for OCR question-detection pass
 TOP_MARGIN_PTS      = 6     # pts above detected question start to include
 OCR_Y_THRESHOLD_PTS = 200   # max PDF pts from page-top for question-num search
 
-# ── A4 portrait slide layout ──────────────────────────────────────────────────
-SLIDE_W_IN  = 8.27
-SLIDE_H_IN  = 11.69
-TITLE_H_IN  = 0.45
-MARGIN_W_IN = 0.30
-MARGIN_H_IN = 0.15
+# ── Slide layout ─────────────────────────────────────────────────────────────
+SLIDE_W_IN  = 13.33   # widescreen landscape
+SLIDE_H_IN  = 7.5
+TITLE_H_IN  = 0.55
+MARGIN_W_IN = 0.0
+MARGIN_H_IN = 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,7 +179,7 @@ def _add_title_bar(slide, slide_w, title_h, label):
 def build_pptx(questions):
     """
     questions: list of {"num": int, "img": PIL.Image}
-    Tiles each question image across A4 portrait slides.
+    One slide per question, screenshot scaled to fit.
     Returns BytesIO of the PPTX.
     """
     prs = Presentation()
@@ -190,53 +190,29 @@ def build_pptx(questions):
     slide_w   = prs.slide_width
     slide_h   = prs.slide_height
     title_h   = Inches(TITLE_H_IN)
-    margin_w  = Inches(MARGIN_W_IN)
-    margin_h  = Inches(MARGIN_H_IN)
-    content_w = slide_w  - 2 * margin_w
-    content_h = slide_h  - title_h - 2 * margin_h
+    content_h = slide_h - title_h
 
     for item in questions:
-        q_num = item["num"]
-        img   = item["img"]
+        slide = prs.slides.add_slide(blank)
+        _add_title_bar(slide, slide_w, title_h, f"第 {item['num']} 题")
+
+        img = item["img"]
         img_w, img_h = img.size
+        aspect = img_w / img_h
 
-        # Scale image to content width; calculate displayed height
-        disp_w    = content_w
-        scale_fac = disp_w / img_w          # EMU per pixel
-        disp_h_total = Emu(int(img_h * scale_fac))
-
-        if disp_h_total <= content_h:
-            # ── Fits on a single slide ────────────────────────────────────
-            slide = prs.slides.add_slide(blank)
-            _add_title_bar(slide, slide_w, title_h, f"第 {q_num} 题")
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            buf.seek(0)
-            top = title_h + margin_h
-            slide.shapes.add_picture(buf, margin_w, top, disp_w, disp_h_total)
+        # Fit inside content area preserving aspect ratio
+        if slide_w / aspect <= content_h:
+            disp_w = slide_w
+            disp_h = Emu(int(slide_w / aspect))
         else:
-            # ── Tile across multiple slides ───────────────────────────────
-            # How many original pixels fit in one slide's content area?
-            px_per_slide = int(img_h * (content_h / disp_h_total))
-            tile_idx  = 0
-            start_px  = 0
-            while start_px < img_h:
-                end_px = min(img_h, start_px + px_per_slide)
-                chunk  = img.crop((0, start_px, img_w, end_px))
-                ch_disp_h = Emu(int((end_px - start_px) * scale_fac))
+            disp_h = content_h
+            disp_w = Emu(int(content_h * aspect))
 
-                label = f"第 {q_num} 题" + (f"  （续 {tile_idx}）" if tile_idx else "")
-                slide = prs.slides.add_slide(blank)
-                _add_title_bar(slide, slide_w, title_h, label)
-
-                buf = io.BytesIO()
-                chunk.save(buf, format="PNG")
-                buf.seek(0)
-                top = title_h + margin_h
-                slide.shapes.add_picture(buf, margin_w, top, disp_w, ch_disp_h)
-
-                tile_idx += 1
-                start_px  = end_px
+        left = Emu(int((slide_w - disp_w) / 2))
+        buf  = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        slide.shapes.add_picture(buf, left, title_h, disp_w, disp_h)
 
     out = io.BytesIO()
     prs.save(out)
