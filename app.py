@@ -1,5 +1,6 @@
 import io
 import re
+import numpy as np
 import fitz  # PyMuPDF
 from flask import Flask, request, send_file, jsonify
 from pptx import Presentation
@@ -120,6 +121,22 @@ def detect_questions_ocr(doc):
 # RENDERING
 # ─────────────────────────────────────────────────────────────────────────────
 
+def crop_lr_whitespace(img, padding=20, threshold=245):
+    """
+    Crop left/right whitespace from a PIL Image independently.
+    Scans each column; columns where all pixels are >= threshold are white.
+    Keeps `padding` pixels of margin on each side of the detected content.
+    """
+    arr = np.array(img.convert("L"))   # grayscale → 2-D array (rows × cols)
+    col_min = arr.min(axis=0)          # darkest pixel in each column
+    content_cols = np.where(col_min < threshold)[0]
+    if content_cols.size == 0:
+        return img
+    left  = max(0,          int(content_cols[0])  - padding)
+    right = min(img.width,  int(content_cols[-1]) + padding + 1)
+    return img.crop((left, 0, right, img.height))
+
+
 def render_question_pages(doc, q_start, q_end):
     """
     Render each PDF page segment of a question as a separate hi-res PIL Image.
@@ -145,7 +162,8 @@ def render_question_pages(doc, q_start, q_end):
         if clip.height < MIN_SEGMENT_H_PTS:
             continue
         pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
-        pages.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        pages.append(crop_lr_whitespace(img))
     return pages or [Image.new("RGB", (100, 100), "white")]
 
 
